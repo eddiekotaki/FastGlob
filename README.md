@@ -1,10 +1,13 @@
 # NAME
 
 FastGlob - A faster glob() implementation
+This is a fork of https://github.com/atoomic/FastGlob
+that adds case insensitivity and fixes the use of backslash as a
+directory separator on Windows platforms.
 
 # VERSION
 
-version 1.5
+version 1.5a
 
 # SYNOPSIS
 
@@ -30,6 +33,7 @@ defaults.
     $FastGlob::curdir = '.';        # name of current directory in dir
     $FastGlob::parentdir = '..';    # name of parent directory in dir
     $FastGlob::hidedotfiles = 1;    # hide filenames starting with .
+    $FastGlob::caseinsensitive = 0; # case sensitivity
 ```
 
 So for MS-DOS for example, you could set these to:
@@ -40,6 +44,7 @@ So for MS-DOS for example, you could set these to:
     $FastGlob::curdir = '.';        # name of current directory in dir
     $FastGlob::parentdir = '..';    # name of parent directory in dir
     $FastGlob::hidedotfiles = 0;    # hide filenames starting with .
+    $FastGlob::caseinsensitive = 1; # case sensitivity
 ```
 
 And for MacOS to:
@@ -50,6 +55,7 @@ And for MacOS to:
     $FastGlob::curdir = '.';        # name of current directory in dir
     $FastGlob::parentdir = '..';    # name of parent directory in dir
     $FastGlob::hidedotfiles = 0;    # hide filenames starting with .
+    $FastGlob::caseinsensitive = 0; # case sensitivity
 ```
 
 # INSTALLATION
