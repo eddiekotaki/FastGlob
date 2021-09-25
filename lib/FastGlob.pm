@@ -38,6 +38,7 @@ So for MS-DOS for example, you could set these to:
         $FastGlob::curdir = '.';        # name of current directory in dir
         $FastGlob::parentdir = '..';    # name of parent directory in dir
         $FastGlob::hidedotfiles = 0;    # hide filenames starting with .
+        $FastGlob::caseinsensitive = 1; # case sensitivity
 
 And for MacOS to:
 
@@ -57,7 +58,7 @@ use Exporter ();
 
 @ISA = qw(Exporter);
 @EXPORT = qw(&glob);
-@EXPORT_OK = qw(dirsep rootpat curdir parentidr hidedotfiles);
+@EXPORT_OK = qw(dirsep rootpat curdir parentdir hidedotfiles caseinsensitive);
 
 use 5.004;
 use strict;                # be good
@@ -69,7 +70,18 @@ our $rootpat= '\A\Z';
 our $curdir = '.';
 our $parentdir = '..';
 our $hidedotfiles = 1;
-our $verbose = 0;
+our $caseinsensitive = 0;
+our $verbose = $ENV{'DEBUG_FASTGLOB'} || 0;
+
+# Defaults for Windows platforms
+if ($^O eq 'MSWin32') {
+    $dirsep = "\\\/";        
+    $rootpat = '[a-zA-Z]:';  
+    $curdir = '.';        
+    $parentdir = '..';    
+    $hidedotfiles = 0;    
+    $caseinsensitive = 1; 
+}
 
 #
 # recursively wildcard expand a list of strings
@@ -90,72 +102,86 @@ sub glob($) {
     $found1 = 0;
     for (@_) {
         if ( m{$bracepat} ) {
-        foreach $part (split(',',$1)) {
-            $out = $_;
-            $out =~ s/$bracepat/$part/;
-            push(@res, $out);
-        }
-        $found1 = 1;
+            foreach $part (split(',',$1)) {
+                $out = $_;
+                $out =~ s/$bracepat/$part/;
+                push(@res, $out);
+            }
+            $found1 = 1;
         } else {
-        push(@res, $_);
+            push(@res, $_);
         }
     }
-    @_ = @res;
+        @_ = @res;
         @res = ();
     }
 
-
     for (@_) {
-    # check for and do  tilde expansion
-    if ( /^\~([^${dirsep}]*)/ ) {
-        my $usr = $1;
-        my $usrdir = ( ($1 eq "") ? getpwuid($<) : getpwnam($usr) )[7];
-        if ($usrdir ne "" ) {
-                s/^\~\Q$usr\E/$usrdir/;
-        push(@res, $_);
-        }
-    } else {
-        push(@res, $_);
-        }
+        # check for and do  tilde expansion
+        if ( /^\~([^\Q${dirsep}\E]*)/ ) {
+            my $usr = $1;
+            my $usrdir = ( ($1 eq "") ? getpwuid($<) : getpwnam($usr) )[7];
+            if ($usrdir ne "" ) {
+                    s/^\~\Q$usr\E/$usrdir/;
+            push(@res, $_);
+            }
+        } else {
+            push(@res, $_);
+            }
     }
     @_ = @res;
     @res = ();
 
     for (@_) {
-    # if there's no wildcards, just return it
-        unless (/(^|[^\\])[*?\[\]{}]/) {
-        push (@res, $_);
-        next;
+        # if there's no wildcards, just return it
+            unless (/(^|[^\\])[*?\[\]{}]/) {
+                push (@res, $_);
+                next;
+            }
+
+        # debugging
+        print __LINE__.": regexp is $_\n" if ($verbose);
+
+        # now split it into directory components
+        # we need to do this before we process
+        # regex as dirsep may be backslash and
+        # that would clash with backslash used for 
+        # escaping
+        my @comps = split(/[\Q$dirsep\E]/);
+
+        map {
+
+            # deal with dot files
+
+            # Make the glob into a regexp
+            # escape + , and | 
+            s/([+.|])/\\$1/go;
+
+            # handle * and ?
+            s/(?<!\\)(\*)/.*/go;
+            s/(?<!\\)(\?)/./go;
+
+            if ( $hidedotfiles ) {
+                s/(\A|\Q$dirsep\E)\.\*/$1(?:^[^.].*)/go;
+                s/(\A|\Q$dirsep\E)\./$1\[\^.\]/go;
+                s/(\A|\Q$dirsep\E)\[\^([^].]*)\]/$1\[\^\\.$2\]/go;
+            }
+
+        } @comps;
+
+        if ($verbose) {
+            print __LINE__.": comps are " . join(", ", map {
+                "|$_|";
+            } @comps) . "\n";
         }
 
-    # Make the glob into a regexp
-    # escape + , and | 
-    s/([+.|])/\\$1/go;
-
-    # handle * and ?
-    s/(?<!\\)(\*)/.*/go;
-    s/(?<!\\)(\?)/./go;
-
-    # deal with dot files
-    if ( $hidedotfiles ) {
-        s/(\A|$dirsep)\.\*/$1(?:[^.].*)?/go;
-        s/(\A|$dirsep)\./$1\[\^.\]/go;
-        s/(\A|$dirsep)\[\^([^].]*)\]/$1\[\^\\.$2\]/go;
-    }
-
-    # debugging
-    print "regexp is $_\n" if ($verbose);
-
-    # now split it into directory components
-    my @comps = split($dirsep);
-
-    if ( $comps[0] =~ /($rootpat)/ ) {
-        shift(@comps);
-        push(@res, &recurseglob( "$1$dirsep", "$1$dirsep" , @comps ));
-    }
-    else {
-        push(@res, &recurseglob( $curdir, '' , @comps ));
-    }
+        if ( $comps[0] =~ /($rootpat)/ ) {
+            shift(@comps);
+            push(@res, &recurseglob( "$1$dirsep", "$1$dirsep" , @comps ));
+        }
+        else {
+            push(@res, &recurseglob( $curdir, '' , @comps ));
+        }
     }
     return sort(@res);
 }
@@ -165,46 +191,95 @@ sub recurseglob($ $ @) {
     my(@res) = ();
     my($re, $anymatches, @names);
 
-
-    if ( @comps == 0 ) {
+    if ( @comps == 0 || ! -d $dir) {
         # bottom of recursion, just return the path 
         chop($dirname);  # always has gratiutous trailing slash
         @res = ($dirname);
     } elsif ($comps[0] eq '') {
         shift(@comps);
-    unshift(@res, &recurseglob( "$dir$dirsep", 
+        unshift(@res, &recurseglob( "$dir$dirsep", 
                     "$dirname$dirsep",
                     @comps ));
     } else {
-        $re = '\A' . shift(@comps) . '\Z';
+        my $matchname = shift(@comps);
+        $re = '\A' . $matchname . '\Z';
+$re = $matchname;
 
-        # slurp in the directory
-        opendir(HANDLE, $dir);
-        @names = readdir(HANDLE);
-        closedir(HANDLE);
+        # don't read the directory if have an exact match
+        if ($matchname =~ m/^[a-z0-9_]+$/i && -e "$dirname$matchname") {
+                @names = $matchname;
+        } else {
+            # slurp in the directory
+            opendir(HANDLE, $dir);
+            @names = readdir(HANDLE);
+            closedir(HANDLE);
+        }
+
 
         # look for matches, and if you find one, glob the rest of the
         # components. We eval the loop so the regexp gets compiled in,
         # making searches on large directories faster.
+        # handle case insensitivity
         $anymatches = 0;
-        print "component re is qr($re)\n" if ($verbose);
-        my $regex = qr($re);
-    foreach (@names) {
-        print "considering |$_|\n" if ($verbose);
-        if ( m{$regex} ) {
-        if ( $#comps > -1 ) {
-            unshift(@res, &recurseglob( "$dir$dirsep$_", 
-                        "$dirname$_$dirsep",
-                        @comps ));
+        my $regex;
+        if ($caseinsensitive) {
+                print __LINE__.": dir is $dir, component re is qr/$re/i\n" if ($verbose);
+                $regex = qr/$re/i;
         } else {
-            unshift(@res, "$dirname$_" );
+                print __LINE__.": dir is $dir, component re is qr{$re}\n" if ($verbose);
+                $regex = qr{$re};
         }
-        $anymatches = 1;
+        foreach (@names) {
+            print __LINE__.": considering |$_|\n" if ($verbose);
+            if ( m{$regex} ) {
+                if ( $_ ne "$curdir" and $_ ne "$parentdir" && (! -d "$dirname$_" && scalar @comps)) {
+
+                    # if we have a non-directory we want to add it
+                    # to the result only if it matches the next regex
+
+                    my $matchname = $comps[0];
+                    my $subre = '\A' . $matchname . '\Z';
+                    my $subregex;
+                    if ($caseinsensitive) {
+                            print __LINE__.": dir is $dir, component re is qr/$re/i\n" if ($verbose);
+                            $subregex = qr/$re/i;
+                    } else {
+                            print __LINE__.":dir is $dir, component re is qr{$re}\n" if ($verbose);
+                            my $subregex = qr{$re};
+                    }
+
+                    if ( "$dirname$_" =~ m{$subregex}  && scalar @comps == 0) {
+                        unshift(@res, "$dirname$_");
+                    }
+                } elsif ( $#comps > -1 ) {
+                    unshift(@res, &recurseglob( "$dir$dirsep$_", 
+                                "$dirname$_$dirsep",
+                                @comps ));
+                } else {
+                    unshift(@res, "$dirname$_" );
+                }
+                $anymatches = 1;
+            }
         }
-    }
     }
     return @res;
 }
 
+
+#
+# If we are a script then return glob with each cmdline-arg
+#
+unless (caller) {
+    $FastGlob::hidedotfiles = 1;    # hide filenames starting with .
+    my $opt_0 = ($ARGV[0] eq '-0') ? defined(shift) : 0;
+    my @globbed = ();
+    my @errmsgs = ();
+    my $matches = 0;
+    for (@ARGV) {
+        for my $f (&glob($_)) {
+            print "$f\n";
+        }
+    }
+}
 1;
 __END__
